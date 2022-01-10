@@ -106,7 +106,7 @@ int main() {
 
     float *a, *result;
     float *cpuA, *cpuResult;
-    cpuResult = new float(0.0f);
+    //cpuResult = new float(0.0f);
 
     curandCreateGeneratorHost(&gen, CURAND_RNG_PSEUDO_MTGP32);
     curandSetPseudoRandomGeneratorSeed(gen, ULLCAST(clock()));
@@ -168,6 +168,7 @@ int main() {
                 cudaFree(result);
 
                 delete[] cpuA;
+                delete[] cpuResult;
 
                 break;
             }
