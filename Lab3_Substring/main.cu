@@ -13,18 +13,14 @@
 #include <thrust/for_each.h>
 #include <thrust/tuple.h>
 #include <thrust/iterator/counting_iterator.h>
+#include "CpuSubstring.h"
+#include "SubstringSymbolPos.hpp"
 
 #define BYTECAST(X) static_cast<uint8_t>(X)
 
-#define LAB3_DBG
+//#define LAB3_DBG
 
-struct SubstringSymbolPos {
-    char symbol;
-    uint32_t substringNum;
-    uint32_t positionInSubstring;
-    SubstringSymbolPos(char sym, uint32_t substr_num, uint32_t pos_in_substr) noexcept:
-        symbol{sym}, substringNum{substr_num}, positionInSubstring{pos_in_substr} {}
-};
+using namespace thrust::placeholders;
 
 enum SearchType {
     ANY, ALL_POS
@@ -56,6 +52,20 @@ struct bytegen {
         return uniDist(randEng);
     }
 };
+
+bool checkResults(std::vector<uint32_t>& a, std::vector<uint32_t>& b) {
+    bool result = false;
+    if (a.size() == b.size()) {
+        result = true;
+        for (uint32_t i = 0; i < a.size(); ++i) {
+            if (a[i] != b[i]) {
+                result = false;
+                break;
+            }
+        }
+    }
+    return result;
+}
 
 enum Options {
     NONE,
@@ -93,12 +103,14 @@ int main() {
             std::cout << "symbol " << s << ", substringNum " << sn << ", positionInSubstring " << pos << std::endl;
         }
 #endif
-    //uint8_t* stringBuffer, searchMatrix;
-    thrust::device_vector<SubstringSymbolPos> devicePositions(positions);
     uint32_t stringBufferSize;
+    uint32_t blockSize;
 
     std::cout << "Введите размер буфера:";
     std::cin >> stringBufferSize;
+
+    std::cout << "Введите размер блока:";
+    std::cin >> blockSize;
 
     //Заполняем буфер случайными символами
     thrust::device_vector<char> stringBuffer(stringBufferSize);
@@ -107,6 +119,12 @@ int main() {
             thrust::make_counting_iterator(stringBufferSize),
             stringBuffer.begin(),
             bytegen());
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start, 0);
+    thrust::device_vector<SubstringSymbolPos> devicePositions(positions);
     //Создаём рабочую матрицу
     thrust::device_vector<uint32_t> resultMatrix(searchStringNum * stringBufferSize);
     uint32_t startPos, length;
@@ -125,49 +143,62 @@ int main() {
     auto rawBuffer = static_cast<const char*>(thrust::raw_pointer_cast(&stringBuffer[0]));
     auto rawPos = static_cast<SubstringSymbolPos*>(thrust::raw_pointer_cast(&devicePositions[0]));
     auto rawMatrix = static_cast<uint32_t*>(thrust::raw_pointer_cast(&resultMatrix[0]));
-    searchSubstrings<<<stringBufferSize/100, 100>>>(rawPos, positions.size(), rawBuffer, stringBufferSize, rawMatrix);
+    searchSubstrings<<<stringBufferSize/blockSize, blockSize>>>(rawPos, positions.size(), rawBuffer, stringBufferSize, rawMatrix);
 
-    auto resultStlVector = std::vector<uint32_t>(searchStringNum * stringBufferSize);
-    thrust::copy(resultMatrix.begin(), resultMatrix.end(), resultStlVector.begin());
-    for (uint32_t i = 0; i < searchStringNum; ++i) {
-        for (uint32_t j = 0; j < stringBufferSize; ++j) {
-            if (resultStlVector[i*stringBufferSize + j] == 0) {
-                std::cout << "Строка " << i << " с позиции " << j << std::endl;
-            }
-        }
-    }
+    int foundCount = thrust::count(resultMatrix.begin(), resultMatrix.end(), 0);
+    thrust::device_vector<uint32_t> foundPos(foundCount);
 
+    thrust::counting_iterator<uint32_t> first((uint32_t) 0);
+    thrust::counting_iterator<uint32_t> last = first + resultMatrix.size();
+
+    thrust::copy_if(
+            thrust::device,
+            thrust::make_counting_iterator((uint32_t)0),
+            thrust::make_counting_iterator(stringBufferSize * searchStringNum),
+            resultMatrix.begin(),
+            foundPos.begin(),
+            _1 == 0
+    );
+    thrust::sort(thrust::device, foundPos.begin(), foundPos.end());
+
+    auto resultStlVector = std::vector<uint32_t>(foundCount);
+    thrust::copy(foundPos.begin(), foundPos.end(), resultStlVector.begin());
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    float elapsedTime;
+    cudaEventElapsedTime(&elapsedTime , start, stop);
+    printf("Время выполнения на GPU: %.6f мс\n", elapsedTime);
 #ifdef LAB3_DBG
+    for (auto& i: resultStlVector) {
+        std::cout << "Строка " << i / stringBufferSize << " с позиции " << i % stringBufferSize << std::endl;
+    }
+#endif
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
     // copy a device_vector into an STL vector
     auto str = std::vector<char>(stringBufferSize);
     thrust::copy(stringBuffer.begin(), stringBuffer.end(), str.begin());
+#ifdef LAB3_DBG
     std::cout << std::string(str.begin(), str.end()) << std::endl;
 #endif
-/*
-    SubstringSymbolPos p(127, 45, 45);
-    Options option = Options::NONE;
-    bool main_cycle = true;
-    while(main_cycle) {
-        printf("Список действий:\n");
-        printf("0 - выход из программы\n");
-        printf("1 - сумма вектора\n");
-        printf("2 - информация о GPU\n");
-        printf("Выберите действие:");
-        scanf_s("%d", &option);
-        switch (option) {
-            case Options::EXIT:
-                main_cycle = false;
-                break;
-            case Options::SUBSTR: {
-                    std::vector<SubstringSymbolPos> positions;
-                    positions.push_back(p);
-                }
-                break;
-            default:
-                printf("Данной опции не существует. Попробуйте ещё раз.\n");
-                break;
-        }
-    }*/
+    for (uint32_t i = 0; i < searchStringNum; ++i) {
+        startPos = i * stringBufferSize;
+        length = searchStrings[i].length();
+        thrust::fill_n(thrust::device, resultMatrix.begin() + startPos, stringBufferSize, length);
+    }
+
+    auto cpuResultMatrix = std::vector<uint32_t>(stringBufferSize*searchStringNum);
+    thrust::host_vector<uint32_t> hostResultMatrix = resultMatrix;
+    thrust::copy(hostResultMatrix.begin(), hostResultMatrix.end(), cpuResultMatrix.begin());
+    auto cpuResult = cpuSearchSubstrings(positions.data(), positions.size(), str.data(), stringBufferSize, cpuResultMatrix.data(), cpuResultMatrix.size());
+
+    if (checkResults(resultStlVector, cpuResult)) {
+        std::cout << "Результат на CPU и GPU не расходится" << std::endl;
+    } else {
+        std::cerr << "ВНИМАНИЕ!!! Результат на CPU и GPU расходится!" << std::endl;
+    }
 
     return 0;
 }
