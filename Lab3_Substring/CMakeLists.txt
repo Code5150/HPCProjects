@@ -14,4 +14,5 @@ set_target_properties(Lab3_Substring PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 target_precompile_headers(Lab3_Substring PUBLIC <cstdint> [["cuda_runtime.h"]] <iostream> <vector> <string>
         <thrust/random.h> <thrust/device_vector.h> <thrust/host_vector.h> <thrust/device_ptr.h> <thrust/device_malloc.h>
-        <thrust/random/linear_congruential_engine.h> <thrust/random/uniform_int_distribution.h>)
+        <thrust/random/linear_congruential_engine.h> <thrust/random/uniform_int_distribution.h> <thrust/for_each.h>
+        <thrust/tuple.h> <thrust/iterator/counting_iterator.h>)
