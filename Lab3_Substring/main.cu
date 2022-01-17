@@ -148,9 +148,6 @@ int main() {
     int foundCount = thrust::count(resultMatrix.begin(), resultMatrix.end(), 0);
     thrust::device_vector<uint32_t> foundPos(foundCount);
 
-    thrust::counting_iterator<uint32_t> first((uint32_t) 0);
-    thrust::counting_iterator<uint32_t> last = first + resultMatrix.size();
-
     thrust::copy_if(
             thrust::device,
             thrust::make_counting_iterator((uint32_t)0),
